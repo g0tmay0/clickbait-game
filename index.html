@@ -186,6 +186,17 @@
       <h2>Better Bait</h2>
       <div id="upgrades"></div>
     </div>
+    <div class="panel" id="sponsorPanel">
+      <h2>📣 Sponsored Bait</h2>
+      <button id="sponsorSlot" style="display:block;width:100%;text-align:center;cursor:pointer;color:var(--text);
+        background:linear-gradient(160deg,rgba(255,255,255,.07),rgba(255,255,255,.02));border:2px dashed rgba(245,179,1,.55);
+        border-radius:14px;padding:20px 14px;font-family:inherit">
+        <span id="sponsorHeadline" style="display:block;font-size:19px;font-weight:900;letter-spacing:1px;color:var(--gold2)">YOUR LOGO HERE</span>
+        <span id="sponsorBody" style="display:block;color:var(--dim);font-size:13px;line-height:1.55;margin-top:7px">This space is for rent. Players will stare at it while clicking a fish hook. That's it. That's the offer.</span>
+        <span style="display:block;color:var(--gold);font-size:11.5px;font-weight:800;letter-spacing:1.5px;margin-top:10px">PLACEMENT, NOT PROMISES — TAP THE AD, IT LIKES IT</span>
+      </button>
+      <div style="color:var(--dim);font-size:12px;margin-top:8px;text-align:center" id="sponsorCount"></div>
+    </div>
     <div class="panel">
       <h2>Go Viral</h2>
       <p style="color:var(--dim);font-size:13.5px;line-height:1.55;margin-bottom:10px">
@@ -384,7 +395,7 @@ scheduleEvent();
 
 function defaultState(){
   return { clicks:0, runClicks:0, lifetimeClicks:0, taps:0, shares:0, prestiges:0,
-           goldenCaught:0, gens:{}, upgrades:{}, ach:{}, frenzyUntil:0, lastSeen:Date.now(), startedAt:Date.now() };
+           goldenCaught:0, adClicks:0, gens:{}, upgrades:{}, ach:{}, frenzyUntil:0, lastSeen:Date.now(), startedAt:Date.now() };
 }
 let S = defaultState();
 try {
@@ -512,6 +523,25 @@ function checkRank(){
   }
 }
 
+/* ---- SPONSORED BAIT: the inventory, honest since day one ---- */
+const SPONSOR_COPY = [
+  { h:"YOUR LOGO HERE", b:"This space is for rent. Players will stare at it while clicking a fish hook. That's it. That's the offer." },
+  { h:"AD SPACE: UNSOLD", b:"Imagine your brand here, being looked at by a person who is also looking at a hook. Simultaneously. That's reach." },
+  { h:"THIS COULD BE YOU", b:"We sell eyeballs, not outcomes. Your logo. Their retinas. A fish hook in between. Romance." },
+  { h:"SPONSORED BY NOBODY", b:"Yet. This slot is held by a hardworking placeholder with dreams. Replace it with your logo and fulfill them." },
+  { h:"YOUR BRAND + THIS HOOK", b:"A love story. Placement in a game people play voluntarily, repeatedly, and for reasons nobody can fully explain." },
+];
+let sponsorIdx = 0;
+document.getElementById("sponsorSlot").addEventListener("click", ()=>{
+  S.adClicks = (S.adClicks||0) + 1;
+  sponsorIdx = (sponsorIdx + 1) % SPONSOR_COPY.length;
+  document.getElementById("sponsorHeadline").textContent = SPONSOR_COPY[sponsorIdx].h;
+  document.getElementById("sponsorBody").textContent = SPONSOR_COPY[sponsorIdx].b;
+  popSound();
+  toast("You clicked the ad. The ad thanks you. Nothing was sold. This is the whole business model.");
+  render(); save();
+});
+
 /* ---- golden bait ---- */
 const golden = document.getElementById("goldenBait");
 function scheduleGolden(){
@@ -595,14 +625,17 @@ function render(){
     `Clicks this run: <b>${fmt(S.runClicks)}</b><br>` +
     `Lifetime clicks: <b>${fmt(S.lifetimeClicks)}</b><br>` +
     `Golden baits caught: <b>${fmtFull(S.goldenCaught)}</b><br>` +
+    `Ads clicked ironically: <b>${fmtFull(S.adClicks||0)}</b><br>` +
     `Generators owned: <b>${genCount(S)}</b>`;
   document.body.classList.toggle("frenzy", S.frenzyUntil > Date.now());
   if (S.frenzyUntil > Date.now()) el("frenzyTime").textContent = Math.ceil((S.frenzyUntil - Date.now())/1000);
   const idx = currentRank();
-  el("rankLine").textContent = "🎖️ " + RANKS[idx].name.toUpperCase();
-  el("rankNext").textContent = idx < RANKS.length - 1
+  el("rankLine").textContent = "🎖️ " + RANKS[idx].name.toUpperCase();  el("rankNext").textContent = idx < RANKS.length - 1
     ? fmtFull(RANKS[idx+1].taps - S.taps) + " taps to " + RANKS[idx+1].name
     : "There is no higher bait honor. You've peaked. It's all downhill.";
+  el("sponsorCount").textContent = (S.adClicks||0) > 0
+    ? "This ad has been clicked " + fmtFull(S.adClicks||0) + " time" + ((S.adClicks||0)===1?"":"s") + ". Voluntarily. Imagine it was yours."
+    : "Advertisers: this is the slot. It's exactly this honest in person, too.";
   const cm = comboMult();
   el("comboWrap").classList.toggle("on", cm > 1 || comboStreak > 3);
   if (cm > 1 || comboStreak > 3) {
