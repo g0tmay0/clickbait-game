@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://clickbait-game.netlify.app/sitemap.xml
