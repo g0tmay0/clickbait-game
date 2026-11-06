@@ -104,6 +104,15 @@
     box-shadow:0 4px 14px rgba(245,179,1,.18)}
   .stats{font-size:13.5px;color:var(--dim);line-height:1.75;font-variant-numeric:tabular-nums}
   .stats b{color:var(--text)}
+  /* ---- v1.8: Businesses You Helped ---- */
+  .helped-row{display:flex;align-items:center;gap:10px;background:var(--panel2);border:1px solid var(--line);
+    border-radius:12px;padding:9px 12px;margin-bottom:7px}
+  .helped-row .hname{flex:1;min-width:0;font-weight:800;font-size:14px}
+  .helped-row .hsub{color:var(--dim);font-size:12px;font-weight:400}
+  .helped-row .hcount{font-size:19px;font-weight:900;color:var(--gold2);min-width:44px;text-align:right;font-variant-numeric:tabular-nums}
+  .helped-badge{font-size:12px;font-weight:800;color:var(--gold);white-space:nowrap}
+  .badge-toast{font-size:15px}
+  .badge-toast small{display:block;font-size:12px;color:var(--dim);font-weight:400;margin-top:3px}
   .row-btns{display:flex;gap:8px;flex-wrap:wrap}
   .small-btn{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:10px;
     padding:8px 12px;cursor:pointer;font-size:13px;transition:border-color .14s ease,transform .14s ease}
@@ -197,6 +206,15 @@
         <span style="display:block;color:var(--gold);font-size:11.5px;font-weight:800;letter-spacing:1.5px;margin-top:10px">WE CAN&rsquo;T PROMISE LIKES. CLICKING IS GUARANTEED — TAP THE AD, IT LIKES IT</span>
       </button>
       <div style="color:var(--dim);font-size:12px;margin-top:8px;text-align:center" id="sponsorCount"></div>
+    </div>
+    <div class="panel" id="helpedPanel">
+      <h2>🏪 Businesses You Helped</h2>
+      <div id="helpedList"></div>
+      <div class="stats" id="helpedTotal" style="margin-top:6px"></div>
+      <div class="row-btns" style="margin-top:10px">
+        <button class="small-btn" id="impactBtn">📸 My Local Impact card</button>
+      </div>
+      <div style="color:var(--dim);font-size:12px;margin-top:8px">Badges are earned with your own real clicks, counted in this browser only: 🎣 First Cast (1) · ☕ Regular (10) · 🏅 Local Legend (50) · 👑 Quarter Maker (100).</div>
     </div>
     <div class="panel">
       <h2>Go Viral</h2>
@@ -532,11 +550,16 @@ function checkRank(){
    every VOLUNTARY player click burns $0.10. At $0 the ad pauses. A top-up
    reactivates it. Every click is a real human tapping on purpose — nothing is
    simulated, inflated, or auto-generated. That's not a limitation; it's the brand.
+   DAILY CAP (added v1.7): a paid sponsor can burn at most 25% of their total
+   purchase per day ($2.00/day minimum), so a budget paces across days instead of
+   vanishing in one busy afternoon; a capped sponsor sits out until tomorrow.
 
    FULFILLMENT (v1, manual): copy the TEMPLATE entry, fill it in, redeploy.
    TOP-UP: raise budget_total AND budget_remaining to the new totals and redeploy —
    players' browsers adopt the new balance automatically (the stamp changes). */
 const SPONSOR_RATES = { impression: 0.01, click: 0.10 };  /* dollars per serve / per voluntary click */
+const SPONSOR_DAILY_CAP_RATE = 0.25;   /* a sponsor burns at most 25% of their purchase per day… */
+const SPONSOR_DAILY_CAP_MIN  = 2.00;   /* …and never less than a $2.00/day allowance */
 const SPONSORS_CONFIG = [
   /* TEMPLATE — paid sponsor (copy this entry, fill it in, uncomment it):
   { id:"their-business-slug", name:"THEIR BUSINESS NAME", pitch:"Their one-line pitch, in their words.",
@@ -555,6 +578,25 @@ const SPONSORS_CONFIG = [
 /* ---- SPONSOR STORE — v1: localStorage. v2: swap the load()/persist() bodies
    for Supabase fetch/upsert; SPONSORS_CONFIG above is the API contract. ---- */
 const SPONSOR_KEY = "clickbait_sponsors_v1";
+function todayKey(){ const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
+/* DAILY CAP basis: sp.budget_total is the sponsor's CUMULATIVE purchased amount —
+   fulfillment raises budget_total on every top-up (see FULFILLMENT note above), so
+   the cap is 25% of everything the sponsor has bought to date, not of what's left. */
+function dailyCapFor(sp){ return Math.max(SPONSOR_DAILY_CAP_MIN, round2((sp.budget_total || 0) * SPONSOR_DAILY_CAP_RATE)); }
+function rollSponsorDay(st){
+  const t = todayKey();
+  if (st.day !== t) { st.day = t; st.burnedToday = 0; }
+}
+function sponsorCapped(sp){
+  if (sp.house) return false;   /* house ads never cap — they fill gaps for free */
+  const st = SponsorStore.get(sp);
+  rollSponsorDay(st);
+  return (st.burnedToday || 0) >= dailyCapFor(sp);
+}
+function recordBurn(st, amount){
+  rollSponsorDay(st);
+  st.burnedToday = round2((st.burnedToday || 0) + amount);
+}
 const SponsorStore = {
   data: {},
   load(){
@@ -564,26 +606,240 @@ const SponsorStore = {
       const st = this.data[sp.id];
       if (!st || st.stamp !== sp.budget_total) {
         /* new sponsor, or a top-up shipped in a redeploy: adopt the config balance,
-           keep the lifetime honest counts */
+           keep the lifetime honest counts and today's burn so far */
         this.data[sp.id] = { remaining: sp.budget_remaining,
                              impressions: st ? st.impressions : 0,
                              clicks: st ? st.clicks : 0,
-                             stamp: sp.budget_total };
+                             stamp: sp.budget_total,
+                             day: st && st.day ? st.day : todayKey(),
+                             burnedToday: st && st.day === todayKey() ? (st.burnedToday || 0) : 0 };
       }
+      /* saves from before v1.7 have no day/burnedToday fields — normalize in place:
+         balances and lifetime counts untouched, the daily counter just starts now */
+      rollSponsorDay(this.data[sp.id]);
     });
     this.persist();
   },
   persist(){ try { localStorage.setItem(SPONSOR_KEY, JSON.stringify(this.data)); } catch(e){} },
   get(sp){
-    if (sp.house) return { remaining: Infinity, impressions: 0, clicks: 0 };
-    return this.data[sp.id] || { remaining: 0, impressions: 0, clicks: 0 };
+    if (sp.house) return { remaining: Infinity, impressions: 0, clicks: 0, day: todayKey(), burnedToday: 0 };
+    return this.data[sp.id] || { remaining: 0, impressions: 0, clicks: 0, day: todayKey(), burnedToday: 0 };
   }
 };
 SponsorStore.load();
 const round2 = n => Math.round(n * 100) / 100;
 
+/* ================= v1.8: SUPPORT BADGES + BUSINESSES YOU HELPED + IMPACT CARD =================
+   Scott's idea (Nov 5): reward the clicking itself. A player earns badges FOR A
+   BUSINESS by clicking that business's ad — real, voluntary taps only, counted
+   in this player's own browser. This store NEVER invents community totals,
+   revenue, or "businesses saved": every number it shows is this player's own
+   stored count, and the panel and the share card say so on their face.
+   Seeding: paid sponsors' counts already live in SponsorStore (clickbait_sponsors_v1);
+   on load, each config sponsor's support record starts from those counts, so an
+   old save's badge state initializes at the player's existing clicks — balances
+   and counts in SponsorStore are never touched by this store. */
+const SUPPORT_KEY = "clickbait_support_v1";
+const SUPPORT_BADGES = [
+  { id:"first-cast",    emoji:"🎣", name:"First Cast",    threshold:1 },
+  { id:"regular",       emoji:"☕", name:"Regular",       threshold:10 },
+  { id:"local-legend",  emoji:"🏅", name:"Local Legend",  threshold:50 },
+  { id:"quarter-maker", emoji:"👑", name:"Quarter Maker", threshold:100 },
+];
+function badgeForCount(n){
+  let b = null;
+  for (const x of SUPPORT_BADGES) if (n >= x.threshold) b = x;
+  return b;
+}
+function nextBadge(n){
+  for (const x of SUPPORT_BADGES) if (n < x.threshold) return x;
+  return null;
+}
+const SupportStore = {
+  data: {},
+  load(){
+    try { this.data = JSON.parse(localStorage.getItem(SUPPORT_KEY)) || {}; } catch(e){ this.data = {}; }
+    this.seedFrom(SponsorStore.data);
+    this.persist();
+  },
+  /* merge authoritative SponsorStore counts in as a floor — used at load, and
+     directly testable with a fabricated old-format sponsor store */
+  seedFrom(sponsorData){
+    SPONSORS_CONFIG.forEach(sp => {
+      const rec = this.record(sp);
+      const st = sponsorData ? sponsorData[sp.id] : null;
+      if (st && !sp.house) {
+        rec.clicks = Math.max(rec.clicks || 0, st.clicks || 0);
+        rec.impressions = Math.max(rec.impressions || 0, st.impressions || 0);
+      }
+      rec.badges = {};
+      for (const b of SUPPORT_BADGES) if ((rec.clicks || 0) >= b.threshold) rec.badges[b.id] = true;
+    });
+  },
+  record(sp){
+    let rec = this.data[sp.id];
+    if (!rec) rec = this.data[sp.id] = { name: sp.name, clicks: 0, impressions: 0, badges: {} };
+    if (sp.name) rec.name = sp.name;
+    if (!rec.badges) rec.badges = {};
+    return rec;
+  },
+  persist(){ try { localStorage.setItem(SUPPORT_KEY, JSON.stringify(this.data)); } catch(e){} },
+  recordImpression(sp){
+    const rec = this.record(sp);
+    rec.impressions = (rec.impressions || 0) + 1;
+    this.persist();
+  },
+  /* one real voluntary click on sp's ad. Returns { count, badge } — badge is the
+     newly earned badge object, or null. Seeded badges never re-fire. */
+  recordClick(sp){
+    const rec = this.record(sp);
+    rec.clicks = (rec.clicks || 0) + 1;
+    let earned = null;
+    for (const b of SUPPORT_BADGES) {
+      if (rec.clicks >= b.threshold && !rec.badges[b.id]) { rec.badges[b.id] = true; earned = b; }
+    }
+    this.persist();
+    return { count: rec.clicks, badge: earned };
+  },
+  helpedList(){
+    return SPONSORS_CONFIG
+      .map(sp => ({ sp, rec: this.data[sp.id] }))
+      .filter(x => x.rec && (x.rec.clicks || 0) > 0)
+      .sort((a,b) => (b.rec.clicks||0) - (a.rec.clicks||0));
+  },
+  totalClicks(){ return this.helpedList().reduce((t,x) => t + (x.rec.clicks || 0), 0); },
+  impactData(){
+    const list = this.helpedList();
+    const total = list.reduce((t,x) => t + (x.rec.clicks || 0), 0);
+    let top = null, biggest = null;
+    for (const x of list) {
+      if (!top || (x.rec.clicks || 0) > (top.rec.clicks || 0)) top = x;
+      const b = badgeForCount(x.rec.clicks || 0);
+      if (b && (!biggest || b.threshold > biggest.threshold)) biggest = b;
+    }
+    return { total, businesses: list.length,
+             topName: top ? (top.rec.name || top.sp.name) : null,
+             topClicks: top ? (top.rec.clicks || 0) : 0,
+             biggestBadge: biggest };
+  },
+  reset(){ this.data = {}; this.persist(); }
+};
+SupportStore.load();
+
+function renderHelpedPanel(){
+  const listEl = document.getElementById("helpedList");
+  const totEl = document.getElementById("helpedTotal");
+  if (!listEl || !totEl) return;
+  const list = SupportStore.helpedList();
+  const sig = list.map(x => x.sp.id + ":" + x.rec.clicks + ":" + x.rec.impressions).join("|");
+  if (sig === renderHelpedPanel._sig) return;
+  renderHelpedPanel._sig = sig;
+  if (!list.length) {
+    listEl.innerHTML = '<div style="color:var(--dim);font-size:13.5px;line-height:1.55">No sponsors clicked yet — the bait is right there. Click a Sponsored Bait ad and the business lands here, with a badge trail to prove it was you.</div>';
+  } else {
+    listEl.innerHTML = list.map(x => {
+      const b = badgeForCount(x.rec.clicks || 0);
+      const nb = nextBadge(x.rec.clicks || 0);
+      const badgeHtml = b
+        ? `<span class="helped-badge">${b.emoji} ${b.name}</span>`
+        : `<span class="helped-badge" style="color:var(--dim)">no badge yet</span>`;
+      const nextHtml = nb ? `<br><span class="hsub">next badge at ${nb.threshold} clicks</span>` : "";
+      const impHtml = (x.rec.impressions || 0) > 0 ? `<br><span class="hsub">seen ${fmtFull(x.rec.impressions)}× by you</span>` : "";
+      return `<div class="helped-row"><span class="hname">${x.rec.name || x.sp.name}${nextHtml}${impHtml}</span>${badgeHtml}<span class="hcount">${fmtFull(x.rec.clicks)}</span></div>`;
+    }).join("");
+  }
+  const total = SupportStore.totalClicks();
+  totEl.innerHTML = total > 0
+    ? `Your sponsor clicks: <b>${fmtFull(total)}</b> — every one a real tap, counted in this browser.`
+    : "";
+}
+
+function badgeToast(sp, badge, count){
+  const t = document.getElementById("toast");
+  t.innerHTML = "";
+  const head = document.createElement("span");
+  head.className = "badge-toast";
+  head.textContent = badge.emoji + " " + badge.name + " — you helped " + sp.name + " " + count + (count === 1 ? " time" : " times") + ".";
+  const sub = document.createElement("small");
+  sub.textContent = "Badge earned with your own clicks, in this browser. Nobody inflated anything.";
+  t.appendChild(head); t.appendChild(sub);
+  t.classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=>t.classList.remove("show"), 4200);
+  confetti(38); sfxAchieve();
+}
+
+/* ---- MY LOCAL IMPACT card: a 1080×1080 canvas built ONLY from this player's
+   own stored support data. Zero clicks → an honest starter card. ---- */
+function drawImpactCard(ctx, d){
+  const W = 1080, H = 1080;
+  ctx.fillStyle = "#070a12"; ctx.fillRect(0, 0, W, H);
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, "rgba(245,179,1,.20)"); grad.addColorStop(1, "rgba(46,196,182,.10)");
+  ctx.fillStyle = grad; ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = "#f5b301"; ctx.lineWidth = 10; ctx.strokeRect(28, 28, W - 56, H - 56);
+  ctx.textAlign = "center";
+  const fit = (text, size, weight) => {
+    let s = size;
+    ctx.font = weight + " " + s + "px 'Segoe UI', system-ui, sans-serif";
+    while (ctx.measureText(text).width > W - 150 && s > 30) { s -= 6; ctx.font = weight + " " + s + "px 'Segoe UI', system-ui, sans-serif"; }
+    return s;
+  };
+  ctx.fillStyle = "#f5b301";
+  fit("🪝 MY LOCAL IMPACT", 84, "900");
+  ctx.fillText("🪝 MY LOCAL IMPACT", W/2, 150);
+  ctx.fillStyle = "#eef2f7";
+  fit(fmtFull(d.total), 240, "900");
+  ctx.fillText(fmtFull(d.total), W/2, 400);
+  ctx.fillStyle = "#ffd34d"; ctx.font = "800 52px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillText("real sponsor clicks", W/2, 470);
+  ctx.fillStyle = "#eef2f7"; ctx.font = "700 56px 'Segoe UI', system-ui, sans-serif";
+  if (d.total > 0) {
+    ctx.fillText("across " + d.businesses + (d.businesses === 1 ? " business" : " businesses") + " I helped", W/2, 575);
+    fit("Top business: " + d.topName + " — " + fmtFull(d.topClicks) + " clicks", 50, "800");
+    ctx.fillStyle = "#ffd34d";
+    ctx.fillText("Top business: " + d.topName + " — " + fmtFull(d.topClicks) + " clicks", W/2, 665);
+    ctx.fillStyle = "#eef2f7"; ctx.font = "800 50px 'Segoe UI', system-ui, sans-serif";
+    ctx.fillText(d.biggestBadge
+      ? "Biggest badge: " + d.biggestBadge.emoji + " " + d.biggestBadge.name
+      : "No badge yet — the first is 1 click away", W/2, 745);
+  } else {
+    ctx.fillText("No sponsors clicked yet.", W/2, 575);
+    ctx.fillStyle = "#ffd34d"; ctx.font = "800 50px 'Segoe UI', system-ui, sans-serif";
+    ctx.fillText("The bait is right there.", W/2, 665);
+  }
+  ctx.fillStyle = "#93a1b5"; ctx.font = "italic 700 46px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillText("Real clicks. Real businesses.", W/2, 880);
+  ctx.fillStyle = "#eef2f7"; ctx.font = "700 40px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillText("— Clickbait, the honest clicker", W/2, 945);
+  ctx.fillStyle = "#f5b301"; ctx.font = "800 38px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillText("clickbait-game.netlify.app", W/2, 1005);
+}
+function shareImpactCard(){
+  const d = SupportStore.impactData();
+  let canvas;
+  try { canvas = document.createElement("canvas"); } catch(e){ canvas = null; }
+  if (!canvas || !canvas.getContext) { toast("This browser won't draw the card. The clicking still counts."); return; }
+  canvas.width = 1080; canvas.height = 1080;
+  const ctx = canvas.getContext("2d");
+  drawImpactCard(ctx, d);
+  const done = blob => {
+    if (!blob) { toast("Card didn't render. Honest failure, reported honestly."); return; }
+    try {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = "my-local-impact.png";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url), 4000);
+      toast("📸 Impact card saved. Every number on it is yours — counted here, not invented.");
+    } catch(e){ toast("Card didn't render. Honest failure, reported honestly."); }
+  };
+  if (canvas.toBlob) canvas.toBlob(done, "image/png");
+  else if (canvas.toDataURL) { const a = document.createElement("a"); a.href = canvas.toDataURL("image/png"); a.download = "my-local-impact.png"; document.body.appendChild(a); a.click(); a.remove(); toast("📸 Impact card saved."); }
+}
+document.getElementById("impactBtn").addEventListener("click", shareImpactCard);
+
 function sponsorPool(){
-  const paid = SPONSORS_CONFIG.filter(sp => !sp.house && SponsorStore.get(sp).remaining > 0);
+  const paid = SPONSORS_CONFIG.filter(sp => !sp.house && SponsorStore.get(sp).remaining > 0 && !sponsorCapped(sp));
   return paid.length ? paid : SPONSORS_CONFIG.filter(sp => sp.house);
 }
 let currentSponsor = null;
@@ -606,6 +862,7 @@ function serveSponsor(sp){
     const st = SponsorStore.get(sp);
     st.impressions++;
     st.remaining = round2(Math.max(0, st.remaining - SPONSOR_RATES.impression));
+    recordBurn(st, SPONSOR_RATES.impression);
     SponsorStore.persist();
   }
   document.getElementById("sponsorHeadline").textContent = sp.name;
@@ -613,14 +870,19 @@ function serveSponsor(sp){
   const img = document.getElementById("sponsorImg");
   if (sp.image) { img.src = sp.image; img.alt = sp.name; img.style.display = "block"; }
   else { img.removeAttribute("src"); img.style.display = "none"; }
+  SupportStore.recordImpression(sp);   /* v1.8: this player has now seen this business */
   updateSponsorCount();
 }
 function updateSponsorCount(){
   const sp = currentSponsor, target = document.getElementById("sponsorCount");
   if (sp && !sp.house) {
     const st = SponsorStore.get(sp);
-    target.textContent = "Sponsored · Served " + fmtFull(st.impressions) + "×, clicked " + fmtFull(st.clicks) +
-      "× — every click voluntary, $" + st.remaining.toFixed(2) + " of budget to go.";
+    rollSponsorDay(st);
+    let line = "Sponsored · Served " + fmtFull(st.impressions) + "×, clicked " + fmtFull(st.clicks) +
+      "× — every click voluntary, $" + st.remaining.toFixed(2) + " of budget to go." +
+      " Today: $" + (st.burnedToday || 0).toFixed(2) + " of $" + dailyCapFor(sp).toFixed(2) + " daily limit.";
+    if (sponsorCapped(sp)) line += " Daily limit reached — back tomorrow.";
+    target.textContent = line;
   } else {
     target.textContent = (S.adClicks||0) > 0
       ? "This ad has been clicked " + fmtFull(S.adClicks||0) + " time" + ((S.adClicks||0)===1?"":"s") + ". Voluntarily. Imagine it was yours."
@@ -630,10 +892,18 @@ function updateSponsorCount(){
 document.getElementById("sponsorSlot").addEventListener("click", ()=>{
   S.adClicks = (S.adClicks||0) + 1;
   const sp = currentSponsor;
+  /* v1.8: every real voluntary slot click counts toward that business's badge —
+     house and paid alike, one tap at a time, exactly as clicked */
+  if (sp) {
+    const res = SupportStore.recordClick(sp);
+    if (res.badge) badgeToast(sp, res.badge, res.count);
+    renderHelpedPanel();
+  }
   if (sp && !sp.house) {
     const st = SponsorStore.get(sp);
     st.clicks++;
     st.remaining = round2(Math.max(0, st.remaining - SPONSOR_RATES.click));
+    recordBurn(st, SPONSOR_RATES.click);
     SponsorStore.persist();
     if (sp.url) {
       window.open(sp.url, "_blank", "noopener");
@@ -745,6 +1015,7 @@ function render(){
     ? fmtFull(RANKS[idx+1].taps - S.taps) + " taps to " + RANKS[idx+1].name
     : "There is no higher bait honor. You've peaked. It's all downhill.";
   updateSponsorCount();
+  renderHelpedPanel();
   const cm = comboMult();
   el("comboWrap").classList.toggle("on", cm > 1 || comboStreak > 3);
   if (cm > 1 || comboStreak > 3) {
@@ -758,6 +1029,7 @@ el("saveBtn").addEventListener("click", ()=>{ save(); toast("Saved. Your clicks 
 el("resetBtn").addEventListener("click", ()=>{
   if (confirm("Hard reset? Every click, gone. Forever. This is the only real decision in this game.")) {
     localStorage.removeItem(SAVE_KEY); S = defaultState(); lastRankIdx = -1; evMult = 1; evUntil = 0;
+    SupportStore.reset(); renderHelpedPanel._sig = null; renderHelpedPanel();   /* v1.8: badges reset with the rest — honestly earned, honestly gone */
     ACHIEVEMENTS.forEach(a=>el("ach-" + a.id).classList.remove("unlocked"));
     render(); save(); toast("Fresh start. The button believes in you.");
   }
