@@ -191,6 +191,7 @@
       <button id="sponsorSlot" style="display:block;width:100%;text-align:center;cursor:pointer;color:var(--text);
         background:linear-gradient(160deg,rgba(255,255,255,.07),rgba(255,255,255,.02));border:2px dashed rgba(245,179,1,.55);
         border-radius:14px;padding:20px 14px;font-family:inherit">
+        <img id="sponsorImg" alt="" style="display:none;max-width:190px;max-height:96px;margin:0 auto 10px;border-radius:10px">
         <span id="sponsorHeadline" style="display:block;font-size:19px;font-weight:900;letter-spacing:1px;color:var(--gold2)">YOUR LOGO HERE</span>
         <span id="sponsorBody" style="display:block;color:var(--dim);font-size:13px;line-height:1.55;margin-top:7px">This space is for rent. Players will stare at it while clicking a fish hook. That's it. That's the offer.</span>
         <span style="display:block;color:var(--gold);font-size:11.5px;font-weight:800;letter-spacing:1.5px;margin-top:10px">WE CAN&rsquo;T PROMISE LIKES. CLICKING IS GUARANTEED — TAP THE AD, IT LIKES IT</span>
@@ -523,25 +524,134 @@ function checkRank(){
   }
 }
 
-/* ---- SPONSORED BAIT: the inventory, honest since day one ---- */
-const SPONSOR_COPY = [
-  { h:"YOUR LOGO HERE", b:"This space is for rent. Players will stare at it while clicking a fish hook. That's it. That's the offer." },
-  { h:"AD SPACE: UNSOLD", b:"Imagine your brand here, being looked at by a person who is also looking at a hook. Simultaneously. That's reach." },
-  { h:"THIS COULD BE YOU", b:"We can't promise likes. We can promise clicking — your logo, front row at a clicking festival. The liking is your department." },
-  { h:"🍕 BIG TONY'S PLANO PIZZA", b:"DEMO SPONSOR — this is what your business looks like in here. Tony isn't real. The staring is. Your turn." },
-  { h:"SPONSORED BY NOBODY", b:"Yet. This slot is held by a hardworking placeholder with dreams. Replace it with your logo and fulfill them." },
-  { h:"YOUR BRAND + THIS HOOK", b:"A love story. Placement in a game people play voluntarily, repeatedly, and for reasons nobody can fully explain." },
+/* ---- SPONSORED BAIT: config-driven since v1.6, honest since day one ----
+   THE MODEL (Scott's): a business pays what it wants (from $5) on Gumroad, and the
+   payment becomes a CLICK BUDGET in SPONSORS_CONFIG below. While budget remains,
+   the ad rotates into this slot — rotation share scales with budget size, so a
+   bigger budget literally shows up more. Every impression served burns $0.01;
+   every VOLUNTARY player click burns $0.10. At $0 the ad pauses. A top-up
+   reactivates it. Every click is a real human tapping on purpose — nothing is
+   simulated, inflated, or auto-generated. That's not a limitation; it's the brand.
+
+   FULFILLMENT (v1, manual): copy the TEMPLATE entry, fill it in, redeploy.
+   TOP-UP: raise budget_total AND budget_remaining to the new totals and redeploy —
+   players' browsers adopt the new balance automatically (the stamp changes). */
+const SPONSOR_RATES = { impression: 0.01, click: 0.10 };  /* dollars per serve / per voluntary click */
+const SPONSORS_CONFIG = [
+  /* TEMPLATE — paid sponsor (copy this entry, fill it in, uncomment it):
+  { id:"their-business-slug", name:"THEIR BUSINESS NAME", pitch:"Their one-line pitch, in their words.",
+    image:"", url:"https://their-site.example", budget_total:5.00, budget_remaining:5.00, weight:1, house:false },
+  */
+  /* HOUSE ADS — free, infinite budget, shown only while NO paid sponsor is live.
+     They fill the gaps and make the sales pitch, in that order. */
+  { id:"house-logo-here",  name:"YOUR LOGO HERE",          pitch:"This space is for rent. Players will stare at it while clicking a fish hook. That's it. That's the offer.", image:"", url:"", budget_total:0, budget_remaining:0, weight:1, house:true },
+  { id:"house-unsold",     name:"AD SPACE: UNSOLD",        pitch:"Imagine your brand here, being looked at by a person who is also looking at a hook. Simultaneously. That's reach.", image:"", url:"", budget_total:0, budget_remaining:0, weight:1, house:true },
+  { id:"house-could-be-you", name:"THIS COULD BE YOU",      pitch:"We can't promise likes. We can promise clicking — your logo, front row at a clicking festival. The liking is your department.", image:"", url:"", budget_total:0, budget_remaining:0, weight:1, house:true },
+  { id:"house-big-tonys",  name:"🍕 BIG TONY'S PLANO PIZZA", pitch:"DEMO SPONSOR — this is what your business looks like in here. Tony isn't real. The staring is. Your turn.", image:"", url:"", budget_total:0, budget_remaining:0, weight:1, house:true },
+  { id:"house-nobody",     name:"SPONSORED BY NOBODY",     pitch:"Yet. This slot is held by a hardworking placeholder with dreams. Replace it with your logo and fulfill them.", image:"", url:"", budget_total:0, budget_remaining:0, weight:1, house:true },
+  { id:"house-love-story", name:"YOUR BRAND + THIS HOOK",  pitch:"A love story. Placement in a game people play voluntarily, repeatedly, and for reasons nobody can fully explain.", image:"", url:"", budget_total:0, budget_remaining:0, weight:1, house:true },
 ];
-let sponsorIdx = 0;
+
+/* ---- SPONSOR STORE — v1: localStorage. v2: swap the load()/persist() bodies
+   for Supabase fetch/upsert; SPONSORS_CONFIG above is the API contract. ---- */
+const SPONSOR_KEY = "clickbait_sponsors_v1";
+const SponsorStore = {
+  data: {},
+  load(){
+    try { this.data = JSON.parse(localStorage.getItem(SPONSOR_KEY)) || {}; } catch(e){ this.data = {}; }
+    SPONSORS_CONFIG.forEach(sp => {
+      if (sp.house) return;
+      const st = this.data[sp.id];
+      if (!st || st.stamp !== sp.budget_total) {
+        /* new sponsor, or a top-up shipped in a redeploy: adopt the config balance,
+           keep the lifetime honest counts */
+        this.data[sp.id] = { remaining: sp.budget_remaining,
+                             impressions: st ? st.impressions : 0,
+                             clicks: st ? st.clicks : 0,
+                             stamp: sp.budget_total };
+      }
+    });
+    this.persist();
+  },
+  persist(){ try { localStorage.setItem(SPONSOR_KEY, JSON.stringify(this.data)); } catch(e){} },
+  get(sp){
+    if (sp.house) return { remaining: Infinity, impressions: 0, clicks: 0 };
+    return this.data[sp.id] || { remaining: 0, impressions: 0, clicks: 0 };
+  }
+};
+SponsorStore.load();
+const round2 = n => Math.round(n * 100) / 100;
+
+function sponsorPool(){
+  const paid = SPONSORS_CONFIG.filter(sp => !sp.house && SponsorStore.get(sp).remaining > 0);
+  return paid.length ? paid : SPONSORS_CONFIG.filter(sp => sp.house);
+}
+let currentSponsor = null;
+function pickSponsor(){
+  const pool = sponsorPool();
+  /* rotation share ∝ weight × budget remaining: bigger budget, more screen time,
+     and the share naturally thins as the budget burns down. The sponsor currently
+     on screen takes a 75% weight penalty — repeats are discouraged, never banned,
+     so weighting holds even with only two sponsors live. */
+  const weights = pool.map(sp => (sp.weight || 1)
+    * (sp.house ? 1 : Math.max(1, SponsorStore.get(sp).remaining))
+    * (currentSponsor && sp.id === currentSponsor.id ? 0.25 : 1));
+  let r = Math.random() * weights.reduce((t,w)=>t+w, 0);
+  for (let i = 0; i < pool.length; i++) { r -= weights[i]; if (r <= 0) return pool[i]; }
+  return pool[pool.length - 1];
+}
+function serveSponsor(sp){
+  currentSponsor = sp;
+  if (!sp.house) {
+    const st = SponsorStore.get(sp);
+    st.impressions++;
+    st.remaining = round2(Math.max(0, st.remaining - SPONSOR_RATES.impression));
+    SponsorStore.persist();
+  }
+  document.getElementById("sponsorHeadline").textContent = sp.name;
+  document.getElementById("sponsorBody").textContent = sp.pitch;
+  const img = document.getElementById("sponsorImg");
+  if (sp.image) { img.src = sp.image; img.alt = sp.name; img.style.display = "block"; }
+  else { img.removeAttribute("src"); img.style.display = "none"; }
+  updateSponsorCount();
+}
+function updateSponsorCount(){
+  const sp = currentSponsor, target = document.getElementById("sponsorCount");
+  if (sp && !sp.house) {
+    const st = SponsorStore.get(sp);
+    target.textContent = "Sponsored · Served " + fmtFull(st.impressions) + "×, clicked " + fmtFull(st.clicks) +
+      "× — every click voluntary, $" + st.remaining.toFixed(2) + " of budget to go.";
+  } else {
+    target.textContent = (S.adClicks||0) > 0
+      ? "This ad has been clicked " + fmtFull(S.adClicks||0) + " time" + ((S.adClicks||0)===1?"":"s") + ". Voluntarily. Imagine it was yours."
+      : "Advertisers: this is the slot. It's exactly this honest in person, too.";
+  }
+}
 document.getElementById("sponsorSlot").addEventListener("click", ()=>{
   S.adClicks = (S.adClicks||0) + 1;
-  sponsorIdx = (sponsorIdx + 1) % SPONSOR_COPY.length;
-  document.getElementById("sponsorHeadline").textContent = SPONSOR_COPY[sponsorIdx].h;
-  document.getElementById("sponsorBody").textContent = SPONSOR_COPY[sponsorIdx].b;
+  const sp = currentSponsor;
+  if (sp && !sp.house) {
+    const st = SponsorStore.get(sp);
+    st.clicks++;
+    st.remaining = round2(Math.max(0, st.remaining - SPONSOR_RATES.click));
+    SponsorStore.persist();
+    if (sp.url) {
+      window.open(sp.url, "_blank", "noopener");
+      toast("You clicked the ad. It opened their site in a new tab. Voluntarily. This is the whole business model.");
+    } else {
+      toast("You clicked the ad. They gave us no link to open. Bold strategy. It still counted.");
+    }
+  } else {
+    toast("You clicked the ad. The ad thanks you. Nothing was sold. This is the whole business model.");
+  }
   popSound();
-  toast("You clicked the ad. The ad thanks you. Nothing was sold. This is the whole business model.");
+  serveSponsor(pickSponsor());
   render(); save();
 });
+serveSponsor(pickSponsor());
+/* the slot rotates on its own every 12s — but only while the tab is actually
+   visible, because an "impression" nobody can see isn't an impression */
+setInterval(()=>{ if (!document.hidden) serveSponsor(pickSponsor()); }, 12000);
 
 /* ---- golden bait ---- */
 const golden = document.getElementById("goldenBait");
@@ -634,9 +744,7 @@ function render(){
   el("rankLine").textContent = "🎖️ " + RANKS[idx].name.toUpperCase();  el("rankNext").textContent = idx < RANKS.length - 1
     ? fmtFull(RANKS[idx+1].taps - S.taps) + " taps to " + RANKS[idx+1].name
     : "There is no higher bait honor. You've peaked. It's all downhill.";
-  el("sponsorCount").textContent = (S.adClicks||0) > 0
-    ? "This ad has been clicked " + fmtFull(S.adClicks||0) + " time" + ((S.adClicks||0)===1?"":"s") + ". Voluntarily. Imagine it was yours."
-    : "Advertisers: this is the slot. It's exactly this honest in person, too.";
+  updateSponsorCount();
   const cm = comboMult();
   el("comboWrap").classList.toggle("on", cm > 1 || comboStreak > 3);
   if (cm > 1 || comboStreak > 3) {
