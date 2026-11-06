@@ -152,6 +152,20 @@
     box-shadow:var(--glass-shadow);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
   #eventBanner.on{display:block}
   #eventBanner.bad{background:linear-gradient(135deg,rgba(92,16,24,.9),rgba(56,8,14,.9));border-color:rgba(230,57,70,.7)}
+  /* ---- v1.9: AWARD BANNER — the marquee. Records get announced, not filed. ---- */
+  #awardBanner{display:none;margin:14px auto 0;max-width:560px;position:relative;overflow:hidden;
+    background:linear-gradient(135deg,#3d2c00,#6b4d00 55%,#3d2c00);border:2px solid var(--gold);
+    border-radius:16px;padding:14px 18px 12px;text-align:center;box-shadow:0 14px 34px rgba(245,179,1,.28), var(--glass-shadow)}
+  #awardBanner.on{display:block;animation:awardIn .38s cubic-bezier(.2,1.4,.4,1)}
+  #awardBanner::after{content:"";position:absolute;inset:0;pointer-events:none;
+    background:linear-gradient(115deg,transparent 30%,rgba(255,255,255,.22) 50%,transparent 70%);
+    background-size:250% 100%;animation:awardSheen 2.2s ease-in-out infinite}
+  @keyframes awardIn{from{opacity:0;transform:translateY(-10px) scale(.96)}to{opacity:1;transform:none}}
+  @keyframes awardSheen{from{background-position:120% 0}to{background-position:-120% 0}}
+  #awardHead{font-size:clamp(17px,3.4vw,21px);font-weight:900;letter-spacing:.6px;color:#ffe27a;line-height:1.25;
+    text-shadow:0 2px 10px rgba(0,0,0,.5)}
+  #awardSub{color:#fdf3d0;font-size:13.5px;font-weight:600;margin-top:4px;line-height:1.45}
+  @media (prefers-reduced-motion: reduce){ #awardBanner{animation:none} #awardBanner::after{animation:none} }
   .confetti{position:fixed;top:-12px;z-index:80;pointer-events:none;border-radius:2px;animation:confettiFall linear forwards}
   @keyframes confettiFall{to{transform:translateY(105vh) rotate(720deg);opacity:.7}}
   #soundBtn{position:fixed;top:12px;right:12px;z-index:65;background:var(--panel);border:1px solid var(--line);
@@ -181,6 +195,7 @@
       <button id="baitBtn" aria-label="Click the bait"><img src="icon-512.png" alt="The bait"></button>
     </div>
     <div id="comboWrap"><div id="comboLabel">COMBO ×2</div><div id="comboBarOuter"><div id="comboBar"></div></div></div>
+    <div id="awardBanner"><div id="awardHead"></div><div id="awardSub"></div></div>
     <div id="eventBanner"></div>
     <div class="honest-line" id="honestLine">This is clickbait. That was the whole pitch.</div>
     <div class="shares-line" id="sharesLine"></div>
@@ -414,13 +429,30 @@ scheduleEvent();
 
 function defaultState(){
   return { clicks:0, runClicks:0, lifetimeClicks:0, taps:0, shares:0, prestiges:0,
-           goldenCaught:0, adClicks:0, gens:{}, upgrades:{}, ach:{}, frenzyUntil:0, lastSeen:Date.now(), startedAt:Date.now() };
+           goldenCaught:0, adClicks:0, gens:{}, upgrades:{}, ach:{}, frenzyUntil:0, lastSeen:Date.now(), startedAt:Date.now(),
+           /* v1.9 personal records — all measured from this player's own play, never estimated */
+           dayKey:"", dayStartLifetime:0, bestDay:0, bestDayBannerDay:"", bestSession:0, bestStreak:0, fastest100:0 };
 }
 let S = defaultState();
 try {
   const raw = localStorage.getItem(SAVE_KEY);
   if (raw) S = Object.assign(defaultState(), JSON.parse(raw));
 } catch(e){}
+
+/* ---- v1.9: the day ledger. A "day" of clicking is measured as lifetime clicks
+   gained since that day began, so taps, generators, events, golden baits and
+   even offline earnings all count exactly as earned — nothing is estimated.
+   Pre-v1.9 saves have no day fields: their records simply start today, rather
+   than pretending a whole history happened in one day. ---- */
+function rollDay(){
+  const t = todayKey();
+  if (!S.dayKey) { S.dayKey = t; S.dayStartLifetime = S.lifetimeClicks; return; }
+  if (S.dayKey === t) return;
+  const gained = Math.max(0, S.lifetimeClicks - (S.dayStartLifetime || 0));
+  if (gained > (S.bestDay || 0)) S.bestDay = gained;
+  S.dayKey = t; S.dayStartLifetime = S.lifetimeClicks;
+}
+rollDay();
 
 function save(){ S.lastSeen = Date.now(); try{ localStorage.setItem(SAVE_KEY, JSON.stringify(S)); }catch(e){} }
 
@@ -494,6 +526,7 @@ document.getElementById("baitBtn").addEventListener("click", ev=>{
   const now = Date.now();
   comboStreak = (now - lastTapAt <= 1200) ? comboStreak + 1 : 1;
   lastTapAt = now;
+  trackTap(now);   /* v1.9: feed the session superlatives (fastest 100, longest streak) */
   const p = perTap(S);
   S.clicks += p; S.runClicks += p; S.lifetimeClicks += p; S.taps++;
   popSound();
@@ -766,6 +799,131 @@ function badgeToast(sp, badge, count){
   t.classList.add("show");
   clearTimeout(toastTimer); toastTimer = setTimeout(()=>t.classList.remove("show"), 4200);
   confetti(38); sfxAchieve();
+  badgeBanner(sp, badge);   /* v1.9: a badge is not filed. It is ANNOUNCED. */
+}
+
+/* ================= v1.9: THE AWARD BANNERS =================
+   Scott's addition (Nov 6): keep handing out badges and awards — with a little
+   banner that announces them, marquee-style, so there's always a next one to
+   chase. Every banner below is computed ONLY from this player's own stored
+   data: their records, their streaks, their Businesses You Helped ledger.
+   There is no server, no other players, and no invented leaderboard — the
+   only person you are beating is you, and the banner says so by cheering.
+   Copy stays in the game's commentary voice: affectionate, dumb-funny,
+   one-liner energy. Records are jokes that happen to be true. */
+const BEST_DAY_SUBS = [
+  "Your previous best has been notified. It's taking it well.",
+  "Somewhere, a finger is asking for a raise.",
+  "Your mother is so proud. Yes, again.",
+];
+const BEST_SESSION_SUBS = [
+  "And you did it all sitting down. Elite athleticism.",
+  "Coaches are calling it a performance. The coaches are you.",
+  "Nobody saw it happen. We all saw it happen.",
+];
+const LEAD_SUBS = [
+  "The other businesses have been informed. There was some crying. Professional crying.",
+  "Loyalty. This is what it looks like. It's clicking.",
+  "A lead change. In clicking. History will remember this day. Briefly.",
+];
+const BADGE_SUBS = {
+  "first-cast":    "One click. A journey begins. The business felt it. Probably.",
+  "regular":       "They know your order now. Your order is clicking.",
+  "local-legend":  "Statues are being discussed. Small ones. In meetings.",
+  "quarter-maker": "One hundred clicks for one business. Tell your mother. She'll want to know.",
+};
+function pickLine(arr){ return arr[Math.floor(Math.random() * arr.length)]; }
+
+/* -- the marquee itself: a queue, so two glories in one second both get their moment -- */
+const awardQueue = [];
+let awardBusy = false;
+function showAward(head, sub){
+  awardQueue.push({ head: head, sub: sub || "" });
+  pumpAwards();
+}
+function pumpAwards(){
+  if (awardBusy || !awardQueue.length) return;
+  awardBusy = true;
+  const a = awardQueue.shift();
+  document.getElementById("awardHead").textContent = a.head;
+  document.getElementById("awardSub").textContent = a.sub;
+  const b = document.getElementById("awardBanner");
+  b.classList.add("on");
+  setTimeout(()=>{ b.classList.remove("on"); awardBusy = false; setTimeout(pumpAwards, 250); }, 4600);
+}
+
+/* -- session records: this page-load's play, measured off the lifetime counter -- */
+let sessionStartLifetime = S.lifetimeClicks;
+let sessionBestAtStart = S.bestSession || 0;
+let sessionRecordFired = false;
+let sessionTapTimes = [];
+let sessionFastest100 = 0;
+let sessionLongestStreak = 0;
+
+/* -- most-backed business: whoever currently tops your own helped ledger -- */
+function leaderNow(){
+  const l = SupportStore.helpedList();
+  return l.length ? { id: l[0].sp.id, name: (l[0].rec.name || l[0].sp.name), clicks: (l[0].rec.clicks || 0) } : null;
+}
+let leaderState = leaderNow() || { id: null, clicks: 0 };
+function checkLeadChange(){
+  const lead = leaderNow();
+  if (!lead) return;
+  if (leaderState.id && lead.id !== leaderState.id && lead.clicks > leaderState.clicks) {
+    showAward("👑 NEW FAVORITE: " + lead.name + " takes the lead — " + fmtFull(lead.clicks) + " of your clicks!", pickLine(LEAD_SUBS));
+    confetti(24);
+  }
+  leaderState = { id: lead.id, clicks: lead.clicks };
+}
+
+/* -- badge promotion: the v1.8 toast stays; the banner is the headline version -- */
+function badgeBanner(sp, badge){
+  showAward(badge.emoji + " BADGE EARNED: " + badge.name + " — for " + sp.name + "!",
+            BADGE_SUBS[badge.id] || "Earned with your own one finger. Your best finger.");
+}
+
+/* -- per-tap superlatives: fastest 100 taps + longest streak, this player's hands only -- */
+function trackTap(now){
+  sessionTapTimes.push(now);
+  if (sessionTapTimes.length > 100) sessionTapTimes.shift();
+  if (sessionTapTimes.length === 100) {
+    const dur = (now - sessionTapTimes[0]) / 1000;
+    if (!sessionFastest100 || dur < sessionFastest100) sessionFastest100 = dur;
+    if (!(S.fastest100 > 0) || dur < S.fastest100) S.fastest100 = dur;
+  }
+  if (comboStreak > sessionLongestStreak) sessionLongestStreak = comboStreak;
+  if (comboStreak > (S.bestStreak || 0)) S.bestStreak = comboStreak;
+}
+function fmtDur(sec){
+  if (!(sec > 0) || !isFinite(sec)) return "—";
+  if (sec < 60) return (Math.round(sec * 10) / 10) + "s";
+  const m = Math.floor(sec / 60), s = Math.round(sec - m * 60);
+  return m + "m " + String(s).padStart(2, "0") + "s";
+}
+
+/* -- record checks, run on the main loop: records fall exactly when they're beaten -- */
+function checkRecords(){
+  rollDay();
+  const dayClicks = S.lifetimeClicks - S.dayStartLifetime;
+  if ((S.bestDay || 0) > 0 && dayClicks > S.bestDay && S.bestDayBannerDay !== S.dayKey) {
+    S.bestDayBannerDay = S.dayKey;
+    showAward("🏆 NEW RECORD: " + fmtFull(dayClicks) + " clicks in one day!", pickLine(BEST_DAY_SUBS));
+    confetti(30);
+  }
+  const sessionClicks = S.lifetimeClicks - sessionStartLifetime;
+  if (sessionClicks > (S.bestSession || 0)) S.bestSession = sessionClicks;
+  if (sessionBestAtStart > 0 && sessionClicks > sessionBestAtStart && !sessionRecordFired) {
+    sessionRecordFired = true;
+    showAward("🏆 NEW SESSION RECORD: " + fmtFull(sessionClicks) + " clicks!", pickLine(BEST_SESSION_SUBS));
+    confetti(30);
+  }
+}
+function v19ResetSession(){
+  sessionStartLifetime = S.lifetimeClicks; sessionBestAtStart = 0; sessionRecordFired = false;
+  sessionTapTimes = []; sessionFastest100 = 0; sessionLongestStreak = 0;
+  leaderState = { id: null, clicks: 0 };
+  awardQueue.length = 0;
+  document.getElementById("awardBanner").classList.remove("on");
 }
 
 /* ---- MY LOCAL IMPACT card: a 1080×1080 canvas built ONLY from this player's
@@ -894,9 +1052,11 @@ document.getElementById("sponsorSlot").addEventListener("click", ()=>{
   const sp = currentSponsor;
   /* v1.8: every real voluntary slot click counts toward that business's badge —
      house and paid alike, one tap at a time, exactly as clicked */
+  let earnedBadge = null, earnedCount = 0;
   if (sp) {
     const res = SupportStore.recordClick(sp);
-    if (res.badge) badgeToast(sp, res.badge, res.count);
+    earnedBadge = res.badge; earnedCount = res.count;
+    checkLeadChange();   /* v1.9: did that click just crown a new most-backed business? */
     renderHelpedPanel();
   }
   if (sp && !sp.house) {
@@ -917,6 +1077,9 @@ document.getElementById("sponsorSlot").addEventListener("click", ()=>{
   popSound();
   serveSponsor(pickSponsor());
   render(); save();
+  /* v1.9: the badge announcement takes the toast last — in v1.8 the generic
+     ad-click toast fired after badgeToast within the same click and wiped it */
+  if (earnedBadge) badgeToast(sp, earnedBadge, earnedCount);
 });
 serveSponsor(pickSponsor());
 /* the slot rotates on its own every 12s — but only while the tab is actually
@@ -1007,6 +1170,8 @@ function render(){
     `Lifetime clicks: <b>${fmt(S.lifetimeClicks)}</b><br>` +
     `Golden baits caught: <b>${fmtFull(S.goldenCaught)}</b><br>` +
     `Ads clicked ironically: <b>${fmtFull(S.adClicks||0)}</b><br>` +
+    `Fastest 100 taps: <b>${fmtDur(Math.min(S.fastest100 || Infinity, sessionFastest100 || Infinity))}</b><br>` +
+    `Longest streak: <b>${fmtFull(Math.max(S.bestStreak || 0, sessionLongestStreak))} taps</b><br>` +
     `Generators owned: <b>${genCount(S)}</b>`;
   document.body.classList.toggle("frenzy", S.frenzyUntil > Date.now());
   if (S.frenzyUntil > Date.now()) el("frenzyTime").textContent = Math.ceil((S.frenzyUntil - Date.now())/1000);
@@ -1030,6 +1195,7 @@ el("resetBtn").addEventListener("click", ()=>{
   if (confirm("Hard reset? Every click, gone. Forever. This is the only real decision in this game.")) {
     localStorage.removeItem(SAVE_KEY); S = defaultState(); lastRankIdx = -1; evMult = 1; evUntil = 0;
     SupportStore.reset(); renderHelpedPanel._sig = null; renderHelpedPanel();   /* v1.8: badges reset with the rest — honestly earned, honestly gone */
+    v19ResetSession();   /* v1.9: records reset too — a fresh start is a fresh start */
     ACHIEVEMENTS.forEach(a=>el("ach-" + a.id).classList.remove("unlocked"));
     render(); save(); toast("Fresh start. The button believes in you.");
   }
@@ -1045,7 +1211,7 @@ setInterval(()=>{
   const now = Date.now(), dt = (now - lastTick) / 1000; lastTick = now;
   const gain = cps(S) * dt;
   if (gain > 0) { S.clicks += gain; S.runClicks += gain; S.lifetimeClicks += gain; }
-  checkAch(); checkRank(); render();
+  checkAch(); checkRank(); checkRecords(); render();
 }, 100);
 setInterval(save, 5000);
 window.addEventListener("beforeunload", save);
